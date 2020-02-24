@@ -36,6 +36,10 @@ enableImageTopic = False
 enableScanTopic = False
 enableDataTopic = False
 maxAngle = None
+scanTopic = "/ping360_node/sonar/scan"
+laserPub2 = None
+ranges = None
+
 
 
 def callback(config, level):
@@ -62,6 +66,42 @@ def callback(config, level):
     return config
 
 
+def callbackConverter(raw):
+    global laserPub2, debug, step, maxAngle, sonarRange, speedOfSound, samplePeriod, transmitDuration, ranges, intensities
+
+    # Initial the LaserScan Intensities & Ranges
+    angle_increment = 2 * pi * step / 360
+
+    angleStart = 360 - (maxAngle/2)
+    sonarRange = raw.range
+
+    # Full clear need only the current angle
+    ranges = [0] * (maxAngle // step)
+    intensities = [0] * (maxAngle // step)
+
+    index = int(round(((raw.angle - angleStart) * 2 * pi / 360) / angle_increment))
+
+    # Get the max starting from half of the intensities
+    max = 0
+    for detectedIntensity in range(len(raw.intensities) / 2, len(raw.intensities)):
+        if raw.intensities[detectedIntensity] >= max:
+            max = raw.intensities[detectedIntensity]
+            detectedIndex = detectedIntensity
+
+    # The index+1 represents the number of samples which then can be used to deduce the range
+    distance = calculateRange(
+        (1 + detectedIndex), samplePeriod, speedOfSound)
+    if distance >= 0.75 and distance <= raw.range:
+        ranges[index] = distance
+        intensities[index] = detectedIntensity
+        if debug:
+            print("Object at {} grad : {}m - {}%".format(raw.angle,
+                                                         ranges[index],
+                                                         float(raw.intensities[index] * 100 / 255)))
+
+    scanDataMsg = generateScanMsg(ranges, intensities, raw.range, step, maxAngle)
+    laserPub2.publish(scanDataMsg)
+
 def main():
     global updated, gain, numberOfSamples, transmitFrequency, transmitDuration, sonarRange, \
         speedOfSound, samplePeriod, debug, step, imgSize, queue_size, threshold, \
@@ -85,8 +125,8 @@ def main():
     debug = rospy.get_param('~debug', True)
     threshold = int(rospy.get_param('~threshold', 200))  # 0-255
 
-    enableImageTopic = rospy.get_param('~enableImageTopic', True)
-    enableScanTopic = rospy.get_param('~enableScanTopic', True)
+    enableImageTopic = rospy.get_param('~enableImageTopic', False)
+    enableScanTopic = rospy.get_param('~enableScanTopic', False)
     enableDataTopic = rospy.get_param('~enableDataTopic', True)
 
     maxAngle = int(rospy.get_param('~maxAngle', 400))  # 0-400
@@ -104,8 +144,10 @@ def main():
     srv = Server(sonarConfig, callback)
 
     # Global Variables
-    angle = 0
+    angle = 360 - (maxAngle/2)
+    angleStart = angle
     bridge = CvBridge()
+    increment = True
 
     # Topic publishers
     imagePub = rospy.Publisher(
@@ -123,7 +165,7 @@ def main():
     image = np.zeros((imgSize, imgSize, 1), np.uint8)
 
     # Initial the LaserScan Intensities & Ranges
-    angle_increment = 2 * pi * step / maxAngle
+    angle_increment = 2 * pi * step / 360
     ranges = [0] * (maxAngle // step)
     intensities = [0] * (maxAngle // step)
 
@@ -138,7 +180,7 @@ def main():
             updateSonarConfig(sensor, gain, transmitFrequency,
                               transmitDuration, samplePeriod, numberOfSamples)
 
-            angle_increment = 2 * pi * step / maxAngle
+            angle_increment = 2 * pi * step / 360
             ranges = [0] * (maxAngle // step)
             intensities = [0] * (maxAngle // step)
 
@@ -152,7 +194,7 @@ def main():
 
         # Prepare scan msg
         if enableScanTopic:
-            index = int(round((angle * 2 * pi / maxAngle) / angle_increment))
+            index = int(round(((angle - angleStart) * 2 * pi / 360) / angle_increment))
 
             # Get the first high intensity value
             for detectedIntensity in data:
@@ -184,7 +226,7 @@ def main():
                     else:
                         pointColor = 0
                     for k in np.linspace(0, step, 8 * step):
-                        theta = 2 * pi * (angle + k) / float(maxAngle)
+                        theta = 2 * pi * (angle + k) / float(360)
                         x = float(i) * cos(theta)
                         y = float(i) * sin(theta)
                         image[int(center[0] + x)][int(center[1] + y)
@@ -196,9 +238,59 @@ def main():
 
             publishImage(image, imagePub, bridge)
 
-        angle = (angle + step) % maxAngle
+        if angle == int((maxAngle-2*step)/2)+360:
+            increment = False
+        if angle == 360 - int(maxAngle/2):
+            increment = True
+
+        if increment == True:
+            angle = angle + step
+        else:
+            angle = angle - step
+
+        rate.sleep()
+        
+
+def convertermain():
+    global laserPub2, queue_size, step, maxAngle, speedOfSound, numberOfSamples, transmitFrequency, \
+        samplePeriod, transmitDuration, ranges, intensities
+
+    # Initialize node
+    rospy.init_node('converter_node')
+
+    # By default do not launch both node
+    # Converter Parameters
+    rawTopic = rospy.get_param('~raw_topic', "/ping360_node/sonar/data")
+    scanTopic = rospy.get_param('~scan_topic', "/ping360_node/sonar/scan2")
+
+    # Output and ROS parameters
+    queue_size = int(rospy.get_param('~queueSize', 1))
+    speedOfSound = rospy.get_param('~speedOfSound', 1500)  # in m/s
+
+    step = int(rospy.get_param('~step', 1))
+    maxAngle = int(rospy.get_param('~maxAngle', 400))  # 0-400
+    numberOfSamples = rospy.get_param('~numberOfSamples', 200)  # Number of points
+    transmitFrequency = rospy.get_param(
+        '~transmitFrequency', 740)  # Default frequency
+    sonarRange = rospy.get_param('~sonarRange', 5)  # in m
+    samplePeriod = calculateSamplePeriod(sonarRange, numberOfSamples, speedOfSound)
+    transmitDuration = adjustTransmitDuration(
+        sonarRange, samplePeriod, speedOfSound)
+
+    ranges = [0] * (maxAngle // step)
+    intensities = [0] * (maxAngle // step)
+
+    laserPub2 = rospy.Publisher(
+        scanTopic, LaserScan, queue_size=queue_size)
+
+    rospy.Subscriber(rawTopic, SonarEcho, callbackConverter)
+    rate = rospy.Rate(100)  # 100hz
+
+    while not rospy.is_shutdown():
         rate.sleep()
 
+def converter(raw):
+    return
 
 def getSonarData(sensor, angle):
     """
@@ -253,9 +345,9 @@ def generateScanMsg(ranges, intensities, sonarRange, step, maxAngle):
     msg = LaserScan()
     msg.header.stamp = rospy.Time.now()
     msg.header.frame_id = 'sonar_frame'
-    msg.angle_min = 0
-    msg.angle_max = 2 * pi
-    msg.angle_increment = 2 * pi * step / maxAngle
+    msg.angle_min = 2 * pi * int(maxAngle/2)/360
+    msg.angle_max = -2 * pi * int(maxAngle/2)/360
+    msg.angle_increment = 2 * pi * step / 360
     msg.time_increment = 0
     msg.range_min = .75
     msg.range_max = sonarRange

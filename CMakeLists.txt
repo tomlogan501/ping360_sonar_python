@@ -201,6 +201,7 @@ include_directories(
 
 install(PROGRAMS
      nodes/ping360_node
+     nodes/converter_node
      DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

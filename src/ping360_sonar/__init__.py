@@ -1,4 +1,5 @@
 from node import main
+from node import convertermain
 from brping.definitions import *
 from brping.pingmessage import *
 from brping.device import PingDevice
