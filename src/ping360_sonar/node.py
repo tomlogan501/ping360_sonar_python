@@ -40,8 +40,6 @@ scanTopic = "/ping360_node/sonar/scan"
 laserPub2 = None
 ranges = None
 
-
-
 def callback(config, level):
     global updated, gain, numberOfSamples, transmitFrequency, transmitDuration, sonarRange, \
         speedOfSound, samplePeriod, debug, step, imgSize, queue_size, threshold, firstRequest
@@ -67,7 +65,8 @@ def callback(config, level):
 
 
 def callbackConverter(raw):
-    global laserPub2, debug, step, maxAngle, sonarRange, speedOfSound, samplePeriod, transmitDuration, ranges, intensities
+    global laserPub2, debug, step, maxAngle, sonarRange, speedOfSound, samplePeriod, transmitDuration, ranges, \
+        intensities
 
     # Initial the LaserScan Intensities & Ranges
     angle_increment = 2 * pi * step / 360
@@ -100,6 +99,10 @@ def callbackConverter(raw):
                                                          float(raw.intensities[index] * 100 / 255)))
 
     scanDataMsg = generateScanMsg(ranges, intensities, raw.range, step, maxAngle)
+    # Set the same timestamp from raw data
+    scanDataMsg.header.stamp = raw.header.stamp
+    # For differentiation
+    scanDataMsg.header.frame_id = 'sonar_frame2'
     laserPub2.publish(scanDataMsg)
 
 def main():
@@ -287,10 +290,8 @@ def convertermain():
     rate = rospy.Rate(100)  # 100hz
 
     while not rospy.is_shutdown():
+        # timeNow = rospy.Time.now()
         rate.sleep()
-
-def converter(raw):
-    return
 
 def getSonarData(sensor, angle):
     """
